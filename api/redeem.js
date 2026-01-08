@@ -1,102 +1,72 @@
 // api/redeem.js
-const axios = require('axios');
 
-// ★★★ 서버에 저장할 쿠폰 리스트 ★★★
-const SERVER_COUPON_LIST = [
-    "BRANZEBRANSEL", "HALFGOODHALFEVIL", "LETSGO7K", "GRACEOFCHAOS",
-    "100MILLIONHEARTS", "7S7E7V7E7N7", "POOKIFIVEKINDS", "GOLDENKINGPEPE",
-    "77EVENT77", "HAPPYNEWYEAR2026", "KEYKEYKEY", "SENAHAJASENA",
-    "SENA77MEMORY", "SENASTARCRYSTAL", "CHAOSESSENCE", "OBLIVION",
-    "TARGETWISH", "DELLONSVSKRIS", "DANCINGPOOKI"
-];
-
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-// 방문자 쿠키 자동 발급 함수
+// 넷마블 방문자 쿠키를 가져오는 함수
 async function getGuestCookie() {
     try {
-        const response = await axios.get('https://coupon.netmarble.com/tskgb', {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
+        const res = await fetch('https://coupon.netmarble.com/tskgb', {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
         });
-        const rawCookies = response.headers['set-cookie'];
-        if (!rawCookies) return "";
-        return rawCookies.map(c => c.split(';')[0]).join('; ');
+        // 쿠키 추출
+        const raw = res.headers.get('set-cookie');
+        if (!raw) return "";
+        return raw.split(',').map(c => c.split(';')[0]).join('; ');
     } catch (e) {
         return "";
     }
 }
 
 export default async function handler(req, res) {
-    // POST 요청만 처리
-    if (req.method !== 'POST') {
-        return res.status(405).json({ error: 'Method Not Allowed' });
+    if (req.method !== 'POST') return res.status(405).send("Method Not Allowed");
+
+    // 프론트에서 UID와 쿠폰코드 1개를 받습니다.
+    const { uid, couponCode } = req.body;
+
+    if (!uid || !couponCode) {
+        return res.status(400).json({ success: false, message: "정보 부족" });
     }
 
-    const { uid } = req.body;
-    if (!uid) {
-        return res.status(400).json({ error: "회원번호(PID)를 입력해주세요." });
-    }
+    try {
+        // 1. 방문자 쿠키 발급
+        const guestCookie = await getGuestCookie();
 
-    // 1. 방문자 쿠키 발급
-    const guestCookie = await getGuestCookie();
-    
-    // 2. 헤더 설정
-    const headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://coupon.netmarble.com/tskgb',
-        'Origin': 'https://coupon.netmarble.com',
-        'Cookie': guestCookie, 
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
-    };
+        // 2. 넷마블 서버로 전송 (Node.js 18 Native Fetch 사용)
+        const params = new URLSearchParams();
+        params.append('gameCode', 'tskgb'); // 리버스 코드
+        params.append('couponCode', couponCode);
+        params.append('pid', uid);
+        params.append('langCd', 'KO_KR');
 
-    const netmarbleUrl = 'https://coupon.netmarble.com/api/coupon/reward';
-    let results = [];
+        const netmarbleRes = await fetch('https://coupon.netmarble.com/api/coupon/reward', {
+            method: 'POST',
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Referer': 'https://coupon.netmarble.com/tskgb',
+                'Origin': 'https://coupon.netmarble.com',
+                'Cookie': guestCookie,
+                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+            },
+            body: params
+        });
 
-    // 3. 쿠폰 반복 입력
-    for (const couponCode of SERVER_COUPON_LIST) {
+        const data = await netmarbleRes.json();
+        
+        // 결과 정리
         let isSuccess = false;
         let message = "";
 
-        try {
-            const params = new URLSearchParams();
-            // ★ 중요: 리버스면 'tskgb', 키우기면 'skiagb'로 수정하세요
-            params.append('gameCode', 'tskgb'); 
-            params.append('couponCode', couponCode);
-            params.append('pid', uid);
-            params.append('langCd', 'KO_KR');
-
-            const response = await axios.post(netmarbleUrl, params, {
-                headers: headers,
-                timeout: 3000 // 타임아웃 짧게
-            });
-
-            const data = response.data;
-
-            if (data.resultCode === 'SUCCESS' || data.resultCode === 'S001') {
-                isSuccess = true;
-                message = "✅ 지급 성공";
-            } else if (data.errorCode === 24004 || String(data.errorCode) === '24004') {
-                isSuccess = true;
-                message = "⚠️ 이미 사용한 쿠폰";
-            } else {
-                message = `❌ ${data.resultMessage || data.message || "실패"}`;
-            }
-        } catch (error) {
-            if (error.response && error.response.data && (error.response.data.errorCode === 24004 || error.response.data.errorCode === '24004')) {
-                isSuccess = true;
-                message = "⚠️ 이미 사용한 쿠폰";
-            } else {
-                message = "❌ 통신 오류/차단";
-            }
+        if (data.resultCode === 'SUCCESS' || data.resultCode === 'S001') {
+            isSuccess = true;
+            message = "✅ 지급 성공";
+        } else if (data.errorCode === 24004 || String(data.errorCode) === '24004') {
+            isSuccess = true; // 중복도 성공 취급
+            message = "⚠️ 이미 사용한 쿠폰";
+        } else {
+            message = `❌ ${data.resultMessage || data.message || "실패"}`;
         }
-        
-        results.push({ coupon: couponCode, message: message });
-        
-        // Vercel 타임아웃 방지를 위해 딜레이 최소화 (0.1초)
-        await sleep(100); 
-    }
 
-    res.status(200).json({ results });
+        return res.status(200).json({ success: isSuccess, message, coupon: couponCode });
+
+    } catch (error) {
+        return res.status(500).json({ success: false, message: "서버 통신 에러", coupon: couponCode });
+    }
 }

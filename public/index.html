@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>세나 리버스 쿠폰 봇</title>
+    <title>세나 리버스 쿠폰 봇 (Vercel Edition)</title>
     <style>
         body { font-family: sans-serif; max-width: 500px; margin: 40px auto; padding: 20px; background: #f4f4f4; }
         .card { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); text-align: center; }
@@ -16,12 +16,13 @@
         .success { color: green; font-weight: bold; }
         .warn { color: orange; font-weight: bold; }
         .fail { color: red; }
+        .loading { color: blue; }
     </style>
 </head>
 <body>
     <div class="card">
         <h2>🎁 세나 리버스 쿠폰 자동입력</h2>
-        <p>회원번호(PID)만 입력하세요.</p>
+        <p>회원번호(PID)를 입력하세요.</p>
         
         <input type="text" id="uid" placeholder="회원번호 입력">
         <button id="btn" onclick="run()">🚀 전체 받기</button>
@@ -30,6 +31,15 @@
     </div>
 
     <script>
+        // ★★★ 쿠폰 리스트는 여기에 둡니다 (수정하기 더 편합니다) ★★★
+        const COUPON_LIST = [
+            "BRANZEBRANSEL", "HALFGOODHALFEVIL", "LETSGO7K", "GRACEOFCHAOS",
+            "100MILLIONHEARTS", "7S7E7V7E7N7", "POOKIFIVEKINDS", "GOLDENKINGPEPE",
+            "77EVENT77", "HAPPYNEWYEAR2026", "KEYKEYKEY", "SENAHAJASENA",
+            "SENA77MEMORY", "SENASTARCRYSTAL", "CHAOSESSENCE", "OBLIVION",
+            "TARGETWISH", "DELLONSVSKRIS", "DANCINGPOOKI"
+        ];
+
         async function run() {
             const uid = document.getElementById('uid').value.trim();
             const btn = document.getElementById('btn');
@@ -38,50 +48,62 @@
             if (!uid) { alert("회원번호를 입력하세요!"); return; }
 
             btn.disabled = true;
-            btn.innerText = "처리 중... (약 5초 소요)";
-            logs.innerHTML = "<div style='text-align:center;'>서버 접속 중...</div>";
+            btn.innerText = "진행 중...";
+            logs.innerHTML = "";
 
-            try {
-                const res = await fetch('/api/redeem', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ uid: uid })
-                });
-                
-                const data = await res.json();
-                logs.innerHTML = "";
-                
-                if (data.error) throw new Error(data.error);
+            let successCnt = 0;
 
-                let successCnt = 0;
-                data.results.forEach(r => {
-                    const div = document.createElement('div');
-                    div.className = 'log-item';
-                    let status = "<span class='fail'>[실패]</span>";
+            // ★ 브라우저에서 하나씩 순서대로 서버에 요청 (시간 초과 방지)
+            for (const code of COUPON_LIST) {
+                // 로그 미리 생성 (진행중 표시)
+                const logItem = document.createElement('div');
+                logItem.className = 'log-item';
+                logItem.innerHTML = `<span class="loading">...</span> <b>${code}</b> 처리 중`;
+                logs.prepend(logItem); // 최신이 위로 오게
+
+                try {
+                    const res = await fetch('/api/redeem', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ uid: uid, couponCode: code })
+                    });
                     
-                    if (r.message.includes('성공')) {
-                        status = "<span class='success'>[성공]</span>";
+                    // 서버 응답이 HTML(에러)인지 JSON(정상)인지 체크
+                    const contentType = res.headers.get("content-type");
+                    if (!contentType || !contentType.includes("application/json")) {
+                        throw new Error("서버 에러 (Vercel Timeout 등)");
+                    }
+
+                    const data = await res.json();
+                    
+                    let statusHtml = "<span class='fail'>[실패]</span>";
+                    if (data.message.includes('성공')) {
+                        statusHtml = "<span class='success'>[성공]</span>";
                         successCnt++;
-                    } else if (r.message.includes('이미')) {
-                        status = "<span class='warn'>[중복]</span>";
+                    } else if (data.message.includes('이미')) {
+                        statusHtml = "<span class='warn'>[중복]</span>";
                         successCnt++;
                     }
-                    div.innerHTML = `${status} <b>${r.coupon}</b> : ${r.message}`;
-                    logs.appendChild(div);
-                });
-                
-                const resultMsg = document.createElement('div');
-                resultMsg.style.textAlign = 'center';
-                resultMsg.style.padding = '10px';
-                resultMsg.innerHTML = `<b>✨ 완료! (성공/중복: ${successCnt}개)</b>`;
-                logs.prepend(resultMsg);
 
-            } catch (err) {
-                logs.innerHTML = `<div class="fail">에러 발생: ${err.message}</div>`;
-            } finally {
-                btn.disabled = false;
-                btn.innerText = "🚀 전체 받기";
+                    // 로그 업데이트
+                    logItem.innerHTML = `${statusHtml} <b>${code}</b> : ${data.message}`;
+
+                } catch (err) {
+                    logItem.innerHTML = `<span class="fail">[에러]</span> <b>${code}</b> : ${err.message}`;
+                }
+
+                // 0.2초 대기 (너무 빠르게 보내면 브라우저가 힘들어함)
+                await new Promise(r => setTimeout(r, 200));
             }
+
+            const resultDiv = document.createElement('div');
+            resultDiv.style.textAlign = 'center';
+            resultDiv.style.padding = '10px';
+            resultDiv.innerHTML = `<b>✨ 작업 완료! (성공/중복: ${successCnt}개)</b>`;
+            logs.prepend(resultDiv);
+
+            btn.disabled = false;
+            btn.innerText = "🚀 전체 받기";
         }
     </script>
 </body>
